@@ -1,1 +1,49 @@
-.
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: ["main", "master"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies and build
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          VITE_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -f "package.json" ]; then
+            npm install --legacy-peer-deps
+            npm run build
+          else
+            SUB_DIR=$(find . -maxdepth 2 -name "package.json" -exec dirname {} \; | head -n 1)
+            echo "Building from subfolder: $SUB_DIR"
+            cd "$SUB_DIR"
+            npm install --legacy-peer-deps
+            npm run build
+            mkdir -p ../dist
+            cp -r dist/* ../dist/
+          fi
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
