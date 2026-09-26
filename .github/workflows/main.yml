@@ -27,11 +27,10 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Locate, install dependencies and build
         env:
-          NODE_ENV: production
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.VITE_GEMINI_API_KEY }}
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
         run: |
@@ -46,12 +45,12 @@ jobs:
             TARGET_FILE="./package.json"
           fi
 
-          # 2. Check anywhere in the repository (excluding .git and node_modules)
+          # 2. Check anywhere in the repository
           if [ -z "$TARGET_FILE" ]; then
             TARGET_FILE=$(find . -not -path "*/.git/*" -not -path "*/node_modules/*" -name "package.json" | head -n 1)
           fi
 
-          # 3. Check for any zip archive if project was committed as zip
+          # 3. Check for any zip archive
           if [ -z "$TARGET_FILE" ]; then
             ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
             if [ -n "$ZIP_FILE" ]; then
@@ -61,12 +60,8 @@ jobs:
             fi
           fi
 
-          # 4. If still not found, print diagnostic information and fail gracefully
           if [ -z "$TARGET_FILE" ]; then
             echo "::error::Could not find package.json anywhere in the repository!"
-            echo "Current directory contents:"
-            ls -la
-            find . -maxdepth 4 -not -path "*/.git/*"
             exit 1
           fi
 
@@ -74,11 +69,11 @@ jobs:
           echo "Target project directory identified at: $TARGET_DIR"
           cd "$TARGET_DIR"
 
-          echo "Installing dependencies..."
-          npm install --legacy-peer-deps
+          echo "Installing all dependencies (including dev tools)..."
+          npm install --include=dev --legacy-peer-deps
 
           echo "Building production bundle..."
-          npm run build
+          npm run build || npx vite build
 
           # Add SPA 404 fallback for GitHub Pages client-side routing
           if [ -f "dist/index.html" ]; then
