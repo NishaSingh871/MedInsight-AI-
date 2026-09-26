@@ -6,7 +6,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: "pages"
@@ -14,6 +16,9 @@ concurrency:
 
 jobs:
   deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -22,28 +27,81 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
 
-      - name: Install dependencies and build
+      - name: Locate, install dependencies and build
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          VITE_GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          NODE_ENV: production
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.VITE_GEMINI_API_KEY }}
+          VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY || secrets.GEMINI_API_KEY }}
         run: |
+          set -e
+          ROOT_DIR="$(pwd)"
+          echo "Starting build process from root: $ROOT_DIR"
+
+          TARGET_FILE=""
+
+          # 1. Check if package.json is at root
           if [ -f "package.json" ]; then
-            npm install --legacy-peer-deps
-            npm run build
-          else
-            SUB_DIR=$(find . -maxdepth 2 -name "package.json" -exec dirname {} \; | head -n 1)
-            echo "Building from subfolder: $SUB_DIR"
-            cd "$SUB_DIR"
-            npm install --legacy-peer-deps
-            npm run build
-            mkdir -p ../dist
-            cp -r dist/* ../dist/
+            TARGET_FILE="./package.json"
           fi
 
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v4
+          # 2. Check anywhere in the repository (excluding .git and node_modules)
+          if [ -z "$TARGET_FILE" ]; then
+            TARGET_FILE=$(find . -not -path "*/.git/*" -not -path "*/node_modules/*" -name "package.json" | head -n 1)
+          fi
+
+          # 3. Check for any zip archive if project was committed as zip
+          if [ -z "$TARGET_FILE" ]; then
+            ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+            if [ -n "$ZIP_FILE" ]; then
+              echo "Found archive $ZIP_FILE, extracting..."
+              unzip -q -o "$ZIP_FILE" -d .
+              TARGET_FILE=$(find . -not -path "*/.git/*" -not -path "*/node_modules/*" -name "package.json" | head -n 1)
+            fi
+          fi
+
+          # 4. If still not found, print diagnostic information and fail gracefully
+          if [ -z "$TARGET_FILE" ]; then
+            echo "::error::Could not find package.json anywhere in the repository!"
+            echo "Current directory contents:"
+            ls -la
+            find . -maxdepth 4 -not -path "*/.git/*"
+            exit 1
+          fi
+
+          TARGET_DIR="$(dirname "$TARGET_FILE")"
+          echo "Target project directory identified at: $TARGET_DIR"
+          cd "$TARGET_DIR"
+
+          echo "Installing dependencies..."
+          npm install --legacy-peer-deps
+
+          echo "Building production bundle..."
+          npm run build
+
+          # Add SPA 404 fallback for GitHub Pages client-side routing
+          if [ -f "dist/index.html" ]; then
+            cp dist/index.html dist/404.html
+          fi
+
+          # Sync built dist to root workspace directory so upload-pages-artifact finds it
+          if [ "$(pwd)" != "$ROOT_DIR" ]; then
+            echo "Copying dist artifacts to root directory: $ROOT_DIR/dist"
+            mkdir -p "$ROOT_DIR/dist"
+            cp -r dist/* "$ROOT_DIR/dist/"
+          fi
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
+          enablement: true
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: './dist'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
